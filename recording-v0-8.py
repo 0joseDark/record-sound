@@ -1,0 +1,133 @@
+import sys
+import os
+import threading
+import numpy as np
+import sounddevice as sd
+import soundfile as sf
+from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QVBoxLayout, QFileDialog, QMessageBox
+from PyQt5.QtCore import pyqtSignal, QThread
+
+# Variáveis globais
+is_recording = False
+is_paused = False
+audio_data = []
+audio_filename = "1.wav"
+output_directory = "recordings"
+
+class RecorderThread(QThread):
+    # Sinal para comunicar atualizações à interface gráfica
+    update_message = pyqtSignal(str)
+
+    def run(self):
+        global is_recording, is_paused, audio_data, audio_filename
+
+        if not os.path.exists(output_directory):
+            os.makedirs(output_directory)
+
+        file_index = 1
+        while os.path.exists(f"{output_directory}/{file_index}.wav"):
+            file_index += 1
+        audio_filename = f"{output_directory}/{file_index}.wav"
+
+        samplerate = 44100
+        channels = 2
+
+        def callback(indata, frames, time, status):
+            if not is_paused:
+                audio_data.append(indata.copy())
+
+        with sd.InputStream(samplerate=samplerate, channels=channels, callback=callback):
+            while is_recording:
+                sd.sleep(1000)
+
+        if audio_data:
+            audio_array = np.concatenate(audio_data, axis=0)
+            sf.write(audio_filename, audio_array, samplerate)
+            self.update_message.emit(f"Gravação salva como {audio_filename}")
+        else:
+            self.update_message.emit("Nenhum áudio gravado.")
+
+class AudioRecorder(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowTitle("Gravador de Áudio")
+        self.setGeometry(100, 100, 300, 200)
+
+        layout = QVBoxLayout()
+
+        self.start_button = QPushButton("Gravar")
+        self.start_button.clicked.connect(self.start_recording)
+        layout.addWidget(self.start_button)
+
+        self.pause_button = QPushButton("Pausar")
+        self.pause_button.clicked.connect(self.pause_recording)
+        layout.addWidget(self.pause_button)
+
+        self.stop_button = QPushButton("Parar")
+        self.stop_button.clicked.connect(self.stop_recording)
+        layout.addWidget(self.stop_button)
+
+        self.choose_directory_button = QPushButton("Escolher Pasta")
+        self.choose_directory_button.clicked.connect(self.choose_directory)
+        layout.addWidget(self.choose_directory_button)
+
+        self.setLayout(layout)
+
+    def choose_directory(self):
+        global output_directory
+        directory = QFileDialog.getExistingDirectory(self, "Escolher Pasta")
+        if directory:
+            output_directory = directory
+            QMessageBox.information(self, "Informação", f"Pasta de gravação definida para:\n{output_directory}")
+
+    def start_recording(self):
+        global is_recording, is_paused, audio_data
+        if not is_recording:
+            is_recording = True
+            is_paused = False
+            audio_data = []
+            self.recorder_thread = RecorderThread()
+            self.recorder_thread.update_message.connect(self.show_message)
+            self.recorder_thread.start()
+            QMessageBox.information(self, "Informação", "Gravação iniciada.")
+
+    def pause_recording(self):
+        global is_paused
+        if is_recording:
+            is_paused = not is_paused
+            state = "pausada" if is_paused else "retomada"
+            QMessageBox.information(self, "Informação", f"Gravação {state}.")
+
+    def stop_recording(self):
+        global is_recording, audio_filename
+        if is_recording:
+            is_recording = False
+            self.recorder_thread.quit()  # Para a thread de gravação
+            self.recorder_thread.wait()  # Aguarda a thread terminar
+            if audio_data:
+                duration = self.get_audio_duration(audio_filename)
+                new_filename = f"{os.path.splitext(audio_filename)[0]}_{duration}.wav"
+                if os.path.exists(audio_filename):
+                    os.rename(audio_filename, new_filename)
+                    QMessageBox.information(self, "Informação", f"Arquivo salvo como {new_filename}")
+                else:
+                    QMessageBox.warning(self, "Erro", "O arquivo de áudio não foi encontrado.")
+
+    def get_audio_duration(self, filename):
+        if os.path.exists(filename):
+            with sf.SoundFile(filename) as f:
+                return int(len(f) / f.samplerate)
+        else:
+            return 0
+
+    def show_message(self, message):
+        QMessageBox.information(self, "Informação", message)
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    recorder = AudioRecorder()
+    recorder.show()
+    sys.exit(app.exec_())
