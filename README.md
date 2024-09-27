@@ -1,3 +1,3 @@
 # record-sound
- record-sound.mp3
+ record-sound
 # pip install pyaudio wave sounddevice soundfile tkinter simpleaudio
